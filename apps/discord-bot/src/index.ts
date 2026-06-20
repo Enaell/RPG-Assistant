@@ -1,0 +1,32 @@
+import 'dotenv/config';
+import { z } from 'zod';
+
+// Validate all required environment variables before any other import.
+// process.exit(1) here is intentional — a misconfigured bot should not start.
+const envSchema = z.object({
+  DISCORD_TOKEN: z.string().min(1, 'DISCORD_TOKEN is required'),
+  DISCORD_CLIENT_ID: z.string().min(1, 'DISCORD_CLIENT_ID is required'),
+  DISCORD_GUILD_ID: z.string().min(1, 'DISCORD_GUILD_ID is required'),
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error('❌ Invalid or missing environment variables:');
+  for (const [key, messages] of Object.entries(parsed.error.flatten().fieldErrors)) {
+    console.error(`  ${key}: ${messages?.join(', ') ?? 'unknown error'}`);
+  }
+  process.exit(1);
+}
+
+export type Env = z.infer<typeof envSchema>;
+export const env: Env = parsed.data;
+
+// Deferred import so env is guaranteed valid before any module initialises
+import('./bot')
+  .then(({ startBot }) => startBot(env))
+  .catch((err: unknown) => {
+    console.error('Fatal error starting bot:', err);
+    process.exit(1);
+  });

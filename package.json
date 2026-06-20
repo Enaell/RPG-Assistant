@@ -1,0 +1,20 @@
+{
+  "name": "rpg-assistant",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI assistant for tabletop RPG sessions over Discord",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:bot": "pnpm --filter @rpg-assistant/discord-bot dev",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "clean": "find . -name dist -not -path '*/node_modules/*' -exec rm -rf {} +"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

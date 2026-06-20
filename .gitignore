@@ -78,6 +78,12 @@ web_modules/
 .next
 out
 
+# TypeScript build output
+dist/
+
+# pnpm
+.pnpm-store/
+
 # Nuxt.js build / generate output
 .nuxt
 dist

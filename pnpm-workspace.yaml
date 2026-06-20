@@ -1,0 +1,16 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - 'services/*'
+
+allowBuilds:
+  '@discordjs/opus': set this to true or false
+  esbuild: set this to true or false
+
+# Packages allowed to run build/install scripts.
+# pnpm v11+ blocks all build scripts by default for security.
+# @discordjs/opus is an optional transitive dep — its native build may fail
+# without C++ build tools (node-gyp), which is fine: opusscript is used instead.
+onlyBuiltDependencies:
+  - '@discordjs/opus'
+  - esbuild
