@@ -13,6 +13,11 @@ const envSchema = z.object({
   DISCORD_CLIENT_ID: z.string().min(1, 'DISCORD_CLIENT_ID is required'),
   DISCORD_GUILD_ID: z.string().min(1, 'DISCORD_GUILD_ID is required'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  // ── Audio output ──────────────────────────────────────────
+  // 'local' → save WAV files to RECORDINGS_DIR (dev/debug only)
+  // 'stt'   → forward to the STT hook (packages/stt-client, Phase 1+)
+  AUDIO_OUTPUT_MODE: z.enum(['local', 'stt']).default('local'),
+  RECORDINGS_DIR: z.string().default('./recordings'),
 });
 
 const parsed = envSchema.safeParse(process.env);

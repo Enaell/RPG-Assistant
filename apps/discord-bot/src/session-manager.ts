@@ -7,6 +7,7 @@ import type { Guild } from 'discord.js';
 import { randomUUID } from 'node:crypto';
 import type { Session, AudioSegment } from '@rpg-assistant/shared-types';
 import { VoiceAudioReceiver } from './voice/receiver';
+import { dispatchAudioSegment } from './audio-output';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -31,11 +32,7 @@ let state: ActiveState | null = null;
 
 /**
  * Called for every completed utterance captured from the voice channel.
- *
- * In Phase 1 this logs metadata and discards the WAV buffer.
- * Replace/extend with your STT client call once packages/stt-client is ready.
- *
- * IMPORTANT: do NOT persist the wavBuffer to disk — transcribe in memory only.
+ * Routes to local WAV save or STT hook depending on AUDIO_OUTPUT_MODE.
  */
 function onAudioSegment(segment: AudioSegment): void {
   const duration = (segment.durationMs / 1000).toFixed(2);
@@ -48,14 +45,7 @@ function onAudioSegment(segment: AudioSegment): void {
     `| ${duration}s | ${size} KB WAV`,
   );
 
-  // ── Phase 1 hook ──────────────────────────────────────────
-  // TODO: uncomment once packages/stt-client is implemented:
-  //
-  //   import { sttClient } from '@rpg-assistant/stt-client'
-  //   sttClient.transcribe(segment).then(line => {
-  //     console.log(`📝 [${line.displayName}]: ${line.text}`)
-  //     // feed line into context-manager, trigger LLM agent, etc.
-  //   })
+  void dispatchAudioSegment(segment);
 }
 
 // ── Public API ───────────────────────────────────────────────
