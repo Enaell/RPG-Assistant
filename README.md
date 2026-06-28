@@ -176,6 +176,7 @@ graph TD
 - [x] Commandes slash : `/session start`, `/session stop`, `/session status`
 - [x] Notice de consentement automatique dans le canal texte
 - [x] Reconnexion automatique en cas de déconnexion vocale
+- [x] `AUDIO_OUTPUT_MODE` — choix entre sauvegarde locale des `.wav` (dev) et hook STT (Phase 1+)
 - [ ] `packages/stt-client` — appel Voxtral API avec le WAV bufferisé
 - [ ] `packages/context-manager` — state machine (scène, ambiance, historique)
 - [ ] `packages/llm-agent` — appel Mistral API → JSON actions validé par Zod
@@ -303,7 +304,18 @@ Remplir `.env` :
 DISCORD_TOKEN=<token copié à l'étape 2>
 DISCORD_CLIENT_ID=<Application ID, onglet General Information>
 DISCORD_GUILD_ID=<ID de votre serveur — clic droit sur le serveur → Copier l'identifiant>
+
+# Sortie audio — 'local' pour sauvegarder les .wav (dev), 'stt' pour le hook STT (Phase 1+)
+AUDIO_OUTPUT_MODE=local
+RECORDINGS_DIR=./recordings
 ```
+
+| Variable | Valeurs | Description |
+|---|---|---|
+| `AUDIO_OUTPUT_MODE` | `local` / `stt` | `local` : enregistre les WAV sur disque (debug uniquement). `stt` : route vers le hook STT (`packages/stt-client`). |
+| `RECORDINGS_DIR` | chemin relatif ou absolu | Répertoire de destination quand `AUDIO_OUTPUT_MODE=local`. Défaut : `./recordings`. |
+
+> ⚠️ `AUDIO_OUTPUT_MODE=local` persiste l'audio brut sur disque. Ne jamais utiliser en production.
 
 > **Activer le mode développeur Discord** : Paramètres → Avancés → Mode développeur
 
@@ -337,12 +349,22 @@ Lors du `/session start`, le bot :
 
 Dans la console, chaque prise de parole apparaît :
 
+**Avec `AUDIO_OUTPUT_MODE=local` :**
 ```
 🎤 [Alice 👑 MJ] 2026-06-20 20:34:11 | 3.20s | 102.4 KB WAV
+💾 [Alice 👑 MJ] 2026-06-20T20-34-11_Alice.wav — 3.20s, 102.4 KB
 🎤 [Bob]         2026-06-20 20:34:15 | 1.50s |  48.0 KB WAV
+💾 [Bob]         2026-06-20T20-34-15_Bob.wav — 1.50s, 48.0 KB
+```
+Les fichiers sont organisés dans `recordings/<sessionId>/`.
+
+**Avec `AUDIO_OUTPUT_MODE=stt` :**
+```
+🎤 [Alice 👑 MJ] 2026-06-20 20:34:11 | 3.20s | 102.4 KB WAV
+🔌 [STT hook] [Alice 👑 MJ] 3.20s, 102.4 KB — en attente d'intégration packages/stt-client
 ```
 
-> Le hook STT est préparé dans `apps/discord-bot/src/session-manager.ts` — les buffers WAV sont prêts pour être envoyés à l'API Voxtral une fois `packages/stt-client` implémenté.
+> Le dispatch audio est géré dans `apps/discord-bot/src/audio-output.ts`. Remplacer le corps de la fonction `logSttStub()` par un appel à `sttClient.transcribe()` une fois `packages/stt-client` implémenté.
 
 ---
 
