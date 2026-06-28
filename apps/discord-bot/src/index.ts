@@ -1,5 +1,10 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { resolve } from 'node:path';
 import { z } from 'zod';
+
+// In a pnpm monorepo, .env lives at the workspace root.
+// __dirname = apps/discord-bot/src → ../../../ = workspace root
+dotenv.config({ path: resolve(__dirname, '../../../.env') });
 
 // Validate all required environment variables before any other import.
 // process.exit(1) here is intentional — a misconfigured bot should not start.
