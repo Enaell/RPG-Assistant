@@ -1,0 +1,54 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# .dockerignore — RPG-Assistant
+#
+# Files/dirs listed here are excluded from the Docker build context.
+# A small context = faster builds and no accidental secret leaks.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Dependencies (rebuilt inside Docker) ─────────────────────────────────────
+**/node_modules/
+
+# ── TypeScript build output (rebuilt inside Docker) ──────────────────────────
+**/dist/
+
+# ── Environment / Secrets (NEVER in image) ───────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Recordings (dev-only audio files, mounted as a bind volume) ──────────────
+recordings/
+apps/discord-bot/recordings/
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+
+# ── OS artifacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+**/*.log
+**/logs/
+
+# ── Test output ───────────────────────────────────────────────────────────────
+**/coverage/
+
+# ── Assets (large binary files, mount as volumes in dev or ship separately) ───
+assets/
+
+# ── Docker files themselves (not needed inside the image) ────────────────────
+docker-compose.yml
+docker-compose.*.yml
+**/Dockerfile
+**/.dockerignore
+
+**/recordings/

@@ -1,0 +1,127 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# RPG-Assistant — Docker Compose
+#
+# ACTIVE SERVICES (Phase 1 MVP):
+#   - discord-bot
+#
+# FUTURE SERVICES (uncomment when the corresponding app/service is implemented):
+#   - orchestrator    Phase 1 — receives Action JSON, dispatches to subsystems
+#   - gm-dashboard    Phase 1 — React web UI for the GM
+#   - whisper-local   Phase 3 — Python faster-whisper microservice
+#   - ollama          Phase 3 — local LLM (llama3, mistral, etc.)
+#
+# Usage:
+#   docker compose up --build          # build and start all active services
+#   docker compose up --build -d       # same, detached
+#   docker compose logs -f discord-bot # follow logs
+#   docker compose down                # stop and remove containers
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Discord Bot ─────────────────────────────────────────────────────────────
+  # Joins a voice channel, captures per-user Opus audio, transcribes via STT,
+  # and dispatches resulting actions through the orchestrator.
+  discord-bot:
+    build:
+      context: . # workspace root (needs monorepo access)
+      dockerfile: apps/discord-bot/Dockerfile
+    env_file:
+      - .env # secrets are never baked into the image
+    volumes:
+      # Bind mount so WAV files are accessible on the host when AUDIO_OUTPUT_MODE=local.
+      # WARNING: local mode persists raw audio — dev/debug only, never in production.
+      - ./recordings:/app/recordings
+    restart: unless-stopped
+    networks:
+      - rpg-internal
+  # ── Orchestrator (Phase 1) ───────────────────────────────────────────────────
+  # Receives Action JSON payloads from the context-manager and dispatches them
+  # to music, image, GM tips, and OBS subsystems.
+  # Exposed on localhost only — never make this port public.
+  #
+  # orchestrator:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/orchestrator/Dockerfile
+  #   ports:
+  #     - "127.0.0.1:3001:3001"
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - sqlite-data:/app/data             # SQLite session logs
+  #   depends_on:
+  #     - discord-bot
+  #   restart: unless-stopped
+  #   networks:
+  #     - rpg-internal
+
+  # ── GM Dashboard (Phase 1) ───────────────────────────────────────────────────
+  # React + Vite static build served by nginx.
+  # Displays the current scene image, active music, and GM tips in real time.
+  #
+  # gm-dashboard:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/gm-dashboard/Dockerfile
+  #   ports:
+  #     - "127.0.0.1:3000:80"               # accessible at http://localhost:3000
+  #   depends_on:
+  #     - orchestrator
+  #   restart: unless-stopped
+  #   networks:
+  #     - rpg-internal
+
+  # ── Whisper Local (Phase 3) ──────────────────────────────────────────────────
+  # Python microservice running faster-whisper for fully offline STT.
+  # Replaces the Voxtral/OpenAI API when AUDIO_OUTPUT_MODE=stt and STT_BACKEND=local.
+  #
+  # whisper-local:
+  #   build:
+  #     context: services/whisper-local
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "127.0.0.1:8001:8001"
+  #   volumes:
+  #     - whisper-models:/app/models        # cached model files (avoids re-download)
+  #   restart: unless-stopped
+  #   networks:
+  #     - rpg-internal
+
+  # ── Ollama — Local LLM (Phase 3) ─────────────────────────────────────────────
+  # Runs open-weight LLMs (mistral, llama3, etc.) locally via REST API.
+  # The llm-agent package targets http://ollama:11434 when LLM_BACKEND=ollama.
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "127.0.0.1:11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama         # downloaded models (can be several GB)
+  #   # ── NVIDIA GPU passthrough (uncomment if you have an NVIDIA GPU) ──────────
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: 1
+  #   #           capabilities: [gpu]
+  #   restart: unless-stopped
+  #   networks:
+  #     - rpg-internal
+
+# ── Volumes (top-level named volumes — uncomment as services are enabled) ─────
+# Named volumes survive `docker compose down` and `docker compose up` cycles.
+# Use `docker compose down -v` to also remove volumes (⚠ deletes all data).
+# volumes:
+#   sqlite-data:    # Phase 1 — session logs and asset metadata (orchestrator)
+#   whisper-models: # Phase 3 — faster-whisper model files (~1-3 GB per model)
+#   ollama-data:    # Phase 3 — Ollama model files (several GB per model)
+
+# ── Networks ─────────────────────────────────────────────────────────────────
+# All services communicate over the internal bridge network.
+# Only explicitly published ports (127.0.0.1:xxxx) are accessible from the host.
+
+networks:
+  rpg-internal:
+    driver: bridge

@@ -368,6 +368,59 @@ Les fichiers sont organisés dans `recordings/<sessionId>/`.
 
 ---
 
+## Docker
+
+Le projet est dockerisé via Docker Compose. Le build context est la racine du workspace (nécessaire pour le monorepo pnpm).
+
+### Prérequis
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) ≥ 4.x
+
+### Lancer avec Docker
+
+```bash
+# Configurer le .env (même étape qu'en local)
+cp .env.example .env
+# … remplir DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID
+
+# Builder et démarrer le bot
+docker compose up --build
+
+# Ou en mode détaché (arrière-plan)
+docker compose up --build -d
+
+# Suivre les logs
+docker compose logs -f discord-bot
+
+# Arrêter
+docker compose down
+```
+
+Quand `AUDIO_OUTPUT_MODE=local`, les fichiers WAV sont écrits dans `recordings/` à la racine du projet (bind mount vers `/app/recordings` dans le conteneur).
+
+### Architecture Docker Compose
+
+| Service | Phase | Description |
+|---|---|---|
+| `discord-bot` | ✅ Phase 1 | Bot actif |
+| `orchestrator` | 🔜 Phase 1 | Décommentez dans `docker-compose.yml` quand implémenté |
+| `gm-dashboard` | 🔜 Phase 1 | React + nginx — décommentez quand implémenté |
+| `whisper-local` | 🔜 Phase 3 | Microservice Python STT local |
+| `ollama` | 🔜 Phase 3 | LLM local (+ GPU passthrough NVIDIA optionnel) |
+
+Les services futurs sont présents dans `docker-compose.yml` sous forme de blocs commentés avec leurs configurations prêtes à l'emploi.
+
+### Multi-stage build (monorepo pnpm)
+
+Le `Dockerfile` du bot utilise deux stages :
+
+1. **Builder** : installe le workspace complet, compile TypeScript, puis `pnpm deploy --prod` produit un répertoire isolé avec uniquement les dépendances de production.
+2. **Runtime** : image Node.js slim, copie uniquement le répertoire déployé. Aucun outil de dev, aucun code source des autres packages.
+
+Les secrets (`.env`) ne sont **jamais** intégrés dans l'image — ils sont injectés par Docker Compose au démarrage via `env_file: .env`.
+
+---
+
 ## Contribuer
 
 Ce projet est développé en solo pour l'instant. Les issues et suggestions sont bienvenues.

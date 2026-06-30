@@ -20,6 +20,9 @@ importers:
       '@rpg-assistant/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@rpg-assistant/stt-client':
+        specifier: workspace:*
+        version: link:../../packages/stt-client
       discord.js:
         specifier: ^14.14.0
         version: 14.26.4
@@ -60,6 +63,25 @@ importers:
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
+
+  packages/stt-client:
+    dependencies:
+      '@rpg-assistant/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.0
+        version: 20.19.43
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^1.2.0
+        version: 1.6.1(@types/node@20.19.43)
 
 packages:
 
