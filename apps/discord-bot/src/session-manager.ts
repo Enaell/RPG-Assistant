@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { Session, AudioSegment } from '@rpg-assistant/shared-types';
 import { VoiceAudioReceiver } from './voice/receiver';
 import { dispatchAudioSegment } from './audio-output';
+import { sessionRepository, transcriptRepository } from './database';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -93,6 +94,13 @@ async function start(options: StartOptions): Promise<Session> {
   state = { session, connection: options.connection, receiver };
   console.log(`🎮 Session ${session.id} started (channel: ${session.channelId})`);
 
+  // Persist the new session
+  try {
+    sessionRepository.save(session);
+  } catch (err) {
+    console.error('❌ [DB] Impossible de sauvegarder la session :', err);
+  }
+
   return session;
 }
 
@@ -114,6 +122,16 @@ async function stop(): Promise<Session> {
   };
 
   console.log(`⏹️ Session ${ended.id} ended.`);
+
+  // Persist the ended state
+  try {
+    sessionRepository.update(ended);
+    const lineCount = transcriptRepository.countBySession(ended.id);
+    console.log(`🗃️  ${lineCount} ligne(s) de transcript sauvegardée(s) pour la session ${ended.id.slice(0, 8)}…`);
+  } catch (err) {
+    console.error('❌ [DB] Impossible de mettre à jour la session :', err);
+  }
+
   return ended;
 }
 

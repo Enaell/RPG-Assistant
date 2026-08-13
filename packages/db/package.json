@@ -1,0 +1,24 @@
+{
+  "name": "@rpg-assistant/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SQLite persistence layer — sessions and transcript lines",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rpg-assistant/shared-types": "workspace:*",
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.2.0"
+  }
+}

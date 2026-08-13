@@ -15,10 +15,25 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   // ── Audio output ──────────────────────────────────────────
   // 'local' → save WAV files to RECORDINGS_DIR (dev/debug only)
-  // 'stt'   → forward to the STT hook (packages/stt-client, Phase 1+)
+  // 'stt'   → forward to packages/stt-client → Mistral Voxtral API
   AUDIO_OUTPUT_MODE: z.enum(['local', 'stt']).default('local'),
   RECORDINGS_DIR: z.string().default('./recordings'),
-});
+  // ── STT — Mistral / Voxtral API ───────────────────────────
+  // Required only when AUDIO_OUTPUT_MODE=stt
+  MISTRAL_API_KEY: z.string().min(1).optional(),
+  // Model for the HTTP transcriptions endpoint.
+  // voxtral-mini-latest          = offline batch (default, recommended for WAV files)
+  // voxtral-mini-transcribe-realtime-2602 = realtime optimised (Phase 2 WebSocket)
+  STT_MODEL: z.string().default('voxtral-mini-latest'),
+  // BCP-47 language hint, e.g. 'fr', 'en'. Leave empty for auto-detection.
+  STT_LANGUAGE: z.string().default('fr'),
+  // ── Database ───────────────────────────────────────────────
+  // Path to the SQLite file (relative to cwd or absolute).
+  DB_PATH: z.string().default('./data/rpg-assistant.db'),
+}).refine(
+  (d) => d.AUDIO_OUTPUT_MODE !== 'stt' || (d.MISTRAL_API_KEY !== undefined && d.MISTRAL_API_KEY.length > 0),
+  { message: 'MISTRAL_API_KEY is required when AUDIO_OUTPUT_MODE=stt', path: ['MISTRAL_API_KEY'] },
+);
 
 const parsed = envSchema.safeParse(process.env);
 

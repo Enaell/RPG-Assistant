@@ -10,6 +10,11 @@ FROM node:20-slim AS builder
 # Enable corepack to get pnpm without a separate install step
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
+# Native build tools required by better-sqlite3 (compiled from source)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 # ── Copy workspace manifests (layer-cached until these files change) ──────────
@@ -20,6 +25,8 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json .npmrc .
 # ── Copy only the packages required by the discord-bot ───────────────────────
 # Add more COPY lines here as new packages/ are created and used by the bot.
 COPY packages/shared-types/  ./packages/shared-types/
+COPY packages/stt-client/    ./packages/stt-client/
+COPY packages/db/            ./packages/db/
 COPY apps/discord-bot/       ./apps/discord-bot/
 
 # ── Install all workspace dependencies ───────────────────────────────────────
@@ -27,7 +34,9 @@ RUN pnpm install --frozen-lockfile
 
 # ── Build workspace packages in dependency order ─────────────────────────────
 RUN pnpm --filter @rpg-assistant/shared-types build
-RUN pnpm --filter @rpg-assistant/discord-bot  build
+RUN pnpm --filter @rpg-assistant/stt-client  build
+RUN pnpm --filter @rpg-assistant/db          build
+RUN pnpm --filter @rpg-assistant/discord-bot build
 
 # ── Deploy: copy the bot + prod deps into an isolated directory ───────────────
 # `pnpm deploy --prod` resolves workspace: references and produces a directory
@@ -55,6 +64,10 @@ COPY --from=builder --chown=nodejs:nodejs /deploy/discord-bot ./
 # It will be overridden by the Docker Compose bind mount in practice,
 # but having it here lets the container start without a mounted volume.
 RUN mkdir -p recordings && chown nodejs:nodejs recordings
+
+# Create the data directory for the SQLite database (DB_PATH=./data/rpg-assistant.db).
+# Overridden by the Docker Compose named volume in production.
+RUN mkdir -p data && chown nodejs:nodejs data
 
 USER nodejs
 
