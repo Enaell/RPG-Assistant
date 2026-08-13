@@ -66,7 +66,7 @@ export class TranscriptRepository {
 
   /** Number of transcript lines saved for a given session. */
   countBySession(sessionId: string): number {
-    const row = this.stmtCountBySession.get(sessionId) as { count: number };
+    const row = this.stmtCountBySession.get(sessionId) as { count: number; };
     return row.count;
   }
 }
