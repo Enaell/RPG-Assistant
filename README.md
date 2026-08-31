@@ -181,7 +181,7 @@ graph TD
 - [x] `packages/stt-client` — appel `POST /v1/audio/transcriptions` + validation Zod
 - [x] `packages/db` — SQLite (`better-sqlite3`) : tables `sessions` + `transcript_lines`
 - [x] Persistance des sessions (start/stop) et des lignes de transcript en base
-- [x] `/session transcribe` — **transcription post-séance** : envoie les WAV locaux à l'API STT par ordre chronologique et sauvegarde le résultat en base
+- [x] `/session transcribe` — **transcription post-séance** : envoie les WAV locaux à l'API STT par ordre chronologique et sauvegarde le résultat en base, avec retry automatique + backoff exponentiel sur rate limit (HTTP 429)
 - [ ] `packages/context-manager` — state machine (scène, ambiance, historique)
 - [ ] `packages/llm-agent` — appel Mistral API → JSON actions validé par Zod
 - [ ] `apps/orchestrator` — dispatch des actions JSON
@@ -320,7 +320,7 @@ RECORDINGS_DIR=./recordings
 | `AUDIO_OUTPUT_MODE` | `local` / `stt` | `local` : enregistre les WAV horodatés sur disque (utilisables ensuite avec `/session transcribe`). `stt` : transcription temps réel via Voxtral. |
 | `RECORDINGS_DIR` | chemin relatif ou absolu | Répertoire de destination quand `AUDIO_OUTPUT_MODE=local`. Défaut : `./recordings`. |
 | `MISTRAL_API_KEY` | clé API | Requis pour `AUDIO_OUTPUT_MODE=stt` **et** pour `/session transcribe`. |
-| `STT_MODEL` | voir `.env.example` | Modèle Voxtral utilisé pour la transcription. Défaut : `voxtral-mini-latest`. |
+| `STT_MODEL` | voir `.env.example` | Modèle Voxtral utilisé pour la transcription. Défaut : `voxtral-mini-latest`. ⚠️ Les modèles `*-realtime-*` (ex. `voxtral-mini-transcribe-realtime-2602`) sont réservés au streaming WebSocket et renvoient une erreur HTTP 400 `invalid_model` sur l'endpoint batch `/v1/audio/transcriptions` utilisé par `/session transcribe`. |
 | `STT_LANGUAGE` | `fr`, `en`… | Hint de langue pour améliorer la précision. Laisser vide = auto-détection. |
 | `DB_PATH` | chemin | Fichier SQLite des sessions et transcripts. Défaut : `./data/rpg-assistant.db`. |
 
@@ -414,6 +414,8 @@ ou pour une session spécifique :
 ```
 Le bot lit les WAV dans `recordings/<sessionId>/` dans l'ordre chronologique, les envoie un par un à l'API Voxtral et sauvegarde chaque réplique en base de données. Un export texte lisible est aussi écrit dans `recordings/<sessionId>/transcript.txt` (une ligne `[horodatage] Locuteur: texte` par réplique) pour être exploité directement sans passer par SQLite.
 
+Sur les sessions de plusieurs centaines de répliques, l'API Mistral peut renvoyer `429 Rate limit exceeded`. Ce cas est géré automatiquement : chaque fichier attend un court délai (300 ms) avant l'envoi suivant, et un 429 déclenche jusqu'à 5 nouvelles tentatives avec backoff exponentiel (2s, 4s, 8s… jusqu'à 30s), en respectant l'en-tête `Retry-After` renvoyé par l'API quand il est présent. Aucune action manuelle n'est requise — la commande peut simplement prendre plus de temps sur une grosse session.
+
 ---
 
 ## Docker
@@ -472,6 +474,9 @@ Les secrets (`.env`) ne sont **jamais** intégrés dans l'image — ils sont inj
 - **`Cannot find module '@rpg-assistant/shared-types'` pendant `docker compose build`** : un fichier `tsconfig.tsbuildinfo` (cache incrémental TypeScript) généré côté host s'est retrouvé dans le contexte de build. Comme les packages utilisent `composite: true`, `tsc` fait confiance à ce cache et saute l'émission de `dist/`. `.dockerignore` exclut désormais `**/*.tsbuildinfo` — si l'erreur revient, vérifiez que ce fichier n'est plus copié dans l'image.
 - **Erreur native `better-sqlite3` / binding manquant au runtime** : vérifiez que `pnpm-workspace.yaml` a bien `allowBuilds.better-sqlite3: true`. Si c'est `false`, le script d'installation qui compile/télécharge le binding natif ne s'exécute pas.
 - **`docker compose build` ne produit aucune sortie dans un terminal WSL** : le contexte Docker CLI doit être `default` (et non `desktop-linux`, qui échoue avec `protocol not available` depuis WSL). Vérifiez avec `docker context ls` et basculez avec `docker context use default` si besoin.
+- **`Cannot find module 'xyz'` dans VS Code uniquement (le build en terminal fonctionne)** : pnpm crée des symlinks dans `node_modules`. S'ils ont été créés via `pnpm install` lancé depuis WSL sur un projet situé sur le disque Windows (`/mnt/c/...`), ce sont des symlinks Linux que le serveur TypeScript de VS Code **côté Windows natif** ne peut pas résoudre. Corrigez en relançant `pnpm install` depuis **PowerShell** (voir note en bas de `.github/copilot-instructions.md`), ou en rouvrant le dossier en fenêtre **WSL Remote** dans VS Code.
+- **Erreur `tsc` : `Property 'X' does not exist on type '{ DISCORD_TOKEN: ...; NODE_ENV: ... }'`** : une variable d'environnement est lue via `env.X` (le type `Env` validé par Zod dans `apps/discord-bot/src/index.ts`) sans avoir été déclarée dans `envSchema`. `tsx` (utilisé par `pnpm dev:bot`) ne type-check pas et laisse passer l'erreur ; seul `tsc`/le build Docker la détecte. Ajoutez le champ manquant à `envSchema`.
+- **`HTTP 429 Rate limit exceeded` pendant `/session transcribe`** : géré automatiquement depuis peu (retry + backoff exponentiel, voir section transcription post-séance ci-dessus). Si l'erreur persiste malgré les 5 tentatives, la clé `MISTRAL_API_KEY` a probablement atteint son quota/tier — vérifiez le compte Mistral.
 
 ---
 
