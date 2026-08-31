@@ -5,5 +5,7 @@ packages:
 
 allowBuilds:
   '@discordjs/opus': true
-  better-sqlite3: false
+  # better-sqlite3 must compile/download its native binding on install —
+  # blocking this causes ERR_MODULE_NOT_FOUND at runtime (missing .node file)
+  better-sqlite3: true
   esbuild: true

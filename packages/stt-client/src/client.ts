@@ -91,9 +91,13 @@ export function createSttClient(config: SttConfig): SttClient {
 
       if (!response.ok) {
         const body = await response.text().catch(() => '(unreadable body)');
+        // Retry-After is seconds per RFC 9110; Mistral returns it on 429s.
+        const retryAfterHeader = response.headers.get('retry-after');
+        const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : undefined;
         throw new SttError(
           `Mistral STT API returned HTTP ${response.status}: ${body}`,
           response.status,
+          retryAfterMs !== undefined && !Number.isNaN(retryAfterMs) ? retryAfterMs : undefined,
         );
       }
 

@@ -20,6 +20,8 @@ export class SessionRepository {
   private readonly stmtUpdate: Database.Statement;
   private readonly stmtFindById: Database.Statement;
   private readonly stmtFindAll: Database.Statement;
+  private readonly stmtFindRecent: Database.Statement;
+  private readonly stmtFindByIdPrefix: Database.Statement;
 
   constructor(db: Database.Database) {
     this.stmtInsert = db.prepare(`
@@ -41,6 +43,14 @@ export class SessionRepository {
 
     this.stmtFindAll = db.prepare(
       'SELECT * FROM sessions ORDER BY started_at DESC',
+    );
+
+    this.stmtFindRecent = db.prepare(
+      'SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?',
+    );
+
+    this.stmtFindByIdPrefix = db.prepare(
+      "SELECT * FROM sessions WHERE id LIKE ? || '%' ORDER BY started_at DESC LIMIT 1",
     );
   }
 
@@ -73,6 +83,20 @@ export class SessionRepository {
 
   findAll(): Session[] {
     return (this.stmtFindAll.all() as SessionRow[]).map(rowToSession);
+  }
+
+  /** Returns the N most recent sessions, newest first. */
+  findRecent(limit: number): Session[] {
+    return (this.stmtFindRecent.all(limit) as SessionRow[]).map(rowToSession);
+  }
+
+  /**
+   * Find a session by the first N characters of its UUID.
+   * Useful when the user provides the short 8-char prefix shown in Discord messages.
+   */
+  findByIdPrefix(prefix: string): Session | undefined {
+    const row = this.stmtFindByIdPrefix.get(prefix) as SessionRow | undefined;
+    return row ? rowToSession(row) : undefined;
   }
 }
 

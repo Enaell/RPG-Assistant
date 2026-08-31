@@ -10,6 +10,9 @@
 
 # ── TypeScript build output (rebuilt inside Docker) ──────────────────────────
 **/dist/
+# Incremental build cache (composite projects) — a stale copy from the host
+# makes tsc believe dist/ is already up to date and skip emitting it entirely.
+**/*.tsbuildinfo
 
 # ── Environment / Secrets (NEVER in image) ───────────────────────────────────
 .env

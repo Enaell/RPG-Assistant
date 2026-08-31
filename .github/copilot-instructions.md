@@ -177,7 +177,7 @@ The state machine emits events consumed by the orchestrator. No direct calls fro
 
 When asked to implement features, respect this phasing:
 
-- **Phase 1 (MVP)**: Discord bot audio capture → Voxtral API STT → Mistral API LLM → basic orchestration (music + image) → GM Dashboard → SQLite logging
+- **Phase 1 (MVP)**: Discord bot audio capture → `AUDIO_OUTPUT_MODE=local` (WAV sur disque) ou `AUDIO_OUTPUT_MODE=stt` (transcription temps réel Voxtral) → `/session transcribe` (transcription post-séance des WAV locaux) → SQLite logging (sessions + transcript_lines) → Mistral API LLM → basic orchestration (music + image) → GM Dashboard
 - **Phase 2**: Speaker diarization, keyword triggers, `/scene` commands, OBS WebSocket, session summaries
 - **Phase 3**: Local STT (Whisper microservice), local LLM (Ollama), semantic asset search
 
@@ -203,6 +203,7 @@ Do not implement Phase 2 or 3 features during Phase 1 work unless explicitly ask
 - **Do not** trust LLM JSON output without Zod validation — models can hallucinate invalid structures
 - **Do not** hardcode asset paths — use the asset library index (SQLite)
 - **Always** handle Discord voice connection drops with exponential backoff reconnect
+- **`RECORDINGS_DIR`/`DB_PATH` are resolved against `process.cwd()`**, which differs between `pnpm dev:bot` (cwd = `apps/discord-bot/`) and Docker (cwd = `/app`, bind-mounted/volumed to the repo root). A session recorded in one environment is invisible to the bot in the other — always check the `📁 Répertoire d'enregistrements : …` startup log to know where a given run actually reads/writes. See README § "Chemins de stockage : local vs Docker".
 
 
 Note : à l'avenir, utilise PowerShell (et non WSL) pour les commandes pnpm install/pnpm add sur ce projet. Les deux environnements peuvent coexister pour le reste (WSL pour les scripts, PowerShell pour la gestion des packages).

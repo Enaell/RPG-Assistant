@@ -9,8 +9,12 @@ import { transcriptRepository } from './database.js';
 // starts, because index.ts validates them with Zod before loading the bot.
 const OUTPUT_MODE = (process.env['AUDIO_OUTPUT_MODE'] ?? 'local') as 'local' | 'stt';
 
-// Resolve relative to cwd (workspace root when launched via pnpm)
+// Resolved relative to process.cwd() — this differs by launch method:
+//   `pnpm dev:bot` sets cwd to apps/discord-bot, Docker sets cwd to /app
+//   (bind-mounted to the repo-root ./recordings). Sessions recorded under one
+//   method are NOT visible from the other — see README "Chemins de stockage".
 const RECORDINGS_DIR = resolve(process.cwd(), process.env['RECORDINGS_DIR'] ?? './recordings');
+console.log(`📁 Répertoire d'enregistrements (mode ${OUTPUT_MODE}) : ${RECORDINGS_DIR}`);
 
 // ── STT client (lazy singleton) ───────────────────────────────────────────────
 // Initialised on first use so the error surface is clear if config is missing.

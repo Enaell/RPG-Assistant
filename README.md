@@ -173,16 +173,19 @@ graph TD
 
 - [x] Bot Discord rejoint le vocal, reçoit l'audio par utilisateur
 - [x] Pipeline audio : Opus → PCM 48kHz stéréo → 16kHz mono WAV
-- [x] Commandes slash : `/session start`, `/session stop`, `/session status`
+- [x] Commandes slash : `/session start`, `/session stop`, `/session status`, `/session list`
 - [x] Notice de consentement automatique dans le canal texte
 - [x] Reconnexion automatique en cas de déconnexion vocale
-- [x] `AUDIO_OUTPUT_MODE` — choix entre sauvegarde locale des `.wav` (dev) et hook STT (Phase 1+)
-- [ ] `packages/stt-client` — appel Voxtral API avec le WAV bufferisé
+- [x] `AUDIO_OUTPUT_MODE=local` — sauvegarde des `.wav` horodatés sur disque
+- [x] `AUDIO_OUTPUT_MODE=stt` — transcription temps réel via l'API Voxtral Mistral
+- [x] `packages/stt-client` — appel `POST /v1/audio/transcriptions` + validation Zod
+- [x] `packages/db` — SQLite (`better-sqlite3`) : tables `sessions` + `transcript_lines`
+- [x] Persistance des sessions (start/stop) et des lignes de transcript en base
+- [x] `/session transcribe` — **transcription post-séance** : envoie les WAV locaux à l'API STT par ordre chronologique et sauvegarde le résultat en base
 - [ ] `packages/context-manager` — state machine (scène, ambiance, historique)
 - [ ] `packages/llm-agent` — appel Mistral API → JSON actions validé par Zod
 - [ ] `apps/orchestrator` — dispatch des actions JSON
 - [ ] `apps/gm-dashboard` — interface web MJ (React + Vite)
-- [ ] Logger de session (SQLite via `better-sqlite3`)
 
 ### Phase 2 — Robustesse & Enrichissement
 
@@ -292,6 +295,8 @@ pnpm install
 5. Permissions bot : `Connect`, `Speak`, `Send Messages`, `Read Message History`
 6. Copier l'URL générée → inviter le bot sur votre serveur
 
+> ⚠️ **Piège fréquent** : le bot peut démarrer et s'authentifier sur Discord (`Bot ready`, commandes slash enregistrées) sans jamais avoir été invité comme **membre** du serveur — ce sont deux étapes distinctes. Si le bot est "en ligne" côté Discord mais invisible dans la liste des membres du serveur, ouvrez l'URL d'invitation (scopes `bot` **et** `applications.commands` cochés) et complétez le flux "Add to Server" pour le bon serveur.
+
 ### 3. Configuration
 
 ```bash
@@ -312,12 +317,40 @@ RECORDINGS_DIR=./recordings
 
 | Variable | Valeurs | Description |
 |---|---|---|
-| `AUDIO_OUTPUT_MODE` | `local` / `stt` | `local` : enregistre les WAV sur disque (debug uniquement). `stt` : route vers le hook STT (`packages/stt-client`). |
+| `AUDIO_OUTPUT_MODE` | `local` / `stt` | `local` : enregistre les WAV horodatés sur disque (utilisables ensuite avec `/session transcribe`). `stt` : transcription temps réel via Voxtral. |
 | `RECORDINGS_DIR` | chemin relatif ou absolu | Répertoire de destination quand `AUDIO_OUTPUT_MODE=local`. Défaut : `./recordings`. |
+| `MISTRAL_API_KEY` | clé API | Requis pour `AUDIO_OUTPUT_MODE=stt` **et** pour `/session transcribe`. |
+| `STT_MODEL` | voir `.env.example` | Modèle Voxtral utilisé pour la transcription. Défaut : `voxtral-mini-latest`. |
+| `STT_LANGUAGE` | `fr`, `en`… | Hint de langue pour améliorer la précision. Laisser vide = auto-détection. |
+| `DB_PATH` | chemin | Fichier SQLite des sessions et transcripts. Défaut : `./data/rpg-assistant.db`. |
 
 > ⚠️ `AUDIO_OUTPUT_MODE=local` persiste l'audio brut sur disque. Ne jamais utiliser en production.
 
-> **Activer le mode développeur Discord** : Paramètres → Avancés → Mode développeur
+#### ⚠️ Chemins de stockage : local vs Docker
+
+`RECORDINGS_DIR` et `DB_PATH` sont résolus relativement à **`process.cwd()`**, qui diffère selon la méthode de lancement :
+
+| Méthode | `cwd` | WAV (`RECORDINGS_DIR=./recordings`) | SQLite (`DB_PATH=./data/rpg-assistant.db`) |
+|---|---|---|---|
+| `pnpm dev:bot` (local) | `apps/discord-bot/` | `apps/discord-bot/recordings/` | `apps/discord-bot/data/rpg-assistant.db` |
+| `docker compose up` | `/app` (conteneur) | `/app/recordings` → bind mount → `./recordings/` (racine du repo) | `/app/data` → volume nommé `db-data` |
+
+**Conséquence** : une session enregistrée en local (`pnpm dev:bot`) n'est **pas visible** par le bot lancé via Docker, et inversement — ce sont deux répertoires et deux bases SQLite complètement différents. Si `/session list` ou `/session transcribe <id>` ne trouve rien après un `docker compose up`, vérifiez d'abord où la session a réellement été capturée (regardez le log `📁 Répertoire d'enregistrements : …` au démarrage du bot) et déplacez le dossier `recordings/<sessionId>/` au bon endroit si besoin.
+
+Depuis peu, `/session transcribe <id>` sait aussi retrouver un dossier `recordings/<sessionId>/` qui n'a **aucune ligne en base** (session capturée avant l'ajout de la persistance SQLite, ou crash avant l'écriture de la ligne) : il enregistre alors une session minimale en base à la volée pour pouvoir la transcrire et la faire apparaître dans `/session list` par la suite.
+
+#### Si `DISCORD_GUILD_ID` ne correspond plus à votre serveur
+
+Les identifiants Discord (snowflakes) ne changent jamais spontanément avec le temps — une longue inactivité (ex. 2 mois sans lancer le bot) n'en est **pas** la cause. Un ID de serveur différent signifie presque toujours que le serveur a été supprimé et recréé, ou que vous pointez vers un serveur de test différent de celui d'origine.
+
+Pour corriger :
+1. Activer le mode développeur si besoin : Discord → Réglages utilisateur → Avancé → **Mode développeur**.
+2. Clic droit sur l'icône du serveur → **Copier l'identifiant du serveur**.
+3. Comparer avec `DISCORD_GUILD_ID` dans `.env` ; le mettre à jour si différent.
+4. Relancer le bot pour que les commandes slash se réenregistrent sur la nouvelle guild :
+   - Local : `pnpm dev:bot`
+   - Docker : `docker compose down && docker compose up --build -d`
+5. Si le bot n'apparaît toujours pas comme membre du (nouveau) serveur, ré-inviter via `DISCORD_BOT_AUTHORIZATION_URI` (voir le piège fréquent ci-dessus).
 
 ### 4. Lancer le bot
 
@@ -341,6 +374,8 @@ Dans votre serveur Discord :
 | `/session start channel:#vocal gm:@alice` | Rejoindre le vocal, démarrer la capture |
 | `/session stop` | Arrêter la capture et quitter le vocal |
 | `/session status` | Afficher la session en cours |
+| `/session list` | Lister les 5 dernières sessions (ID, durée, lignes transcrites) |
+| `/session transcribe [session-id:<id>]` | Transcrire les WAV locaux d'une session post-séance |
 
 Lors du `/session start`, le bot :
 1. Affiche une **notice de consentement** dans le canal texte
@@ -356,15 +391,28 @@ Dans la console, chaque prise de parole apparaît :
 🎤 [Bob]         2026-06-20 20:34:15 | 1.50s |  48.0 KB WAV
 💾 [Bob]         2026-06-20T20-34-15_Bob.wav — 1.50s, 48.0 KB
 ```
-Les fichiers sont organisés dans `recordings/<sessionId>/`.
+Les fichiers sont organisés dans `recordings/<sessionId>/`. En fin de séance, utilisez `/session transcribe` pour les envoyer à l'API STT et récupérer la transcription complète.
 
 **Avec `AUDIO_OUTPUT_MODE=stt` :**
 ```
 🎤 [Alice 👑 MJ] 2026-06-20 20:34:11 | 3.20s | 102.4 KB WAV
-🔌 [STT hook] [Alice 👑 MJ] 3.20s, 102.4 KB — en attente d'intégration packages/stt-client
+📝 [Alice 👑 MJ]: Vous entrez dans une taverne sombre et enfumée…
+🎤 [Bob]         2026-06-20 20:34:15 | 1.50s |  48.0 KB WAV
+📝 [Bob]: Je cherche le barman du regard.
 ```
+Chaque transcription est sauvegardée dans `transcript_lines` (SQLite).
 
-> Le dispatch audio est géré dans `apps/discord-bot/src/audio-output.ts`. Remplacer le corps de la fonction `logSttStub()` par un appel à `sttClient.transcribe()` une fois `packages/stt-client` implémenté.
+**Transcription post-séance (`/session transcribe`) :**
+
+Après une session enregistrée en mode `local`, lancez :
+```
+/session transcribe
+```
+ou pour une session spécifique :
+```
+/session transcribe session-id:a1b2c3d4
+```
+Le bot lit les WAV dans `recordings/<sessionId>/` dans l'ordre chronologique, les envoie un par un à l'API Voxtral et sauvegarde chaque réplique en base de données. Un export texte lisible est aussi écrit dans `recordings/<sessionId>/transcript.txt` (une ligne `[horodatage] Locuteur: texte` par réplique) pour être exploité directement sans passer par SQLite.
 
 ---
 
@@ -418,6 +466,12 @@ Le `Dockerfile` du bot utilise deux stages :
 2. **Runtime** : image Node.js slim, copie uniquement le répertoire déployé. Aucun outil de dev, aucun code source des autres packages.
 
 Les secrets (`.env`) ne sont **jamais** intégrés dans l'image — ils sont injectés par Docker Compose au démarrage via `env_file: .env`.
+
+### Dépannage
+
+- **`Cannot find module '@rpg-assistant/shared-types'` pendant `docker compose build`** : un fichier `tsconfig.tsbuildinfo` (cache incrémental TypeScript) généré côté host s'est retrouvé dans le contexte de build. Comme les packages utilisent `composite: true`, `tsc` fait confiance à ce cache et saute l'émission de `dist/`. `.dockerignore` exclut désormais `**/*.tsbuildinfo` — si l'erreur revient, vérifiez que ce fichier n'est plus copié dans l'image.
+- **Erreur native `better-sqlite3` / binding manquant au runtime** : vérifiez que `pnpm-workspace.yaml` a bien `allowBuilds.better-sqlite3: true`. Si c'est `false`, le script d'installation qui compile/télécharge le binding natif ne s'exécute pas.
+- **`docker compose build` ne produit aucune sortie dans un terminal WSL** : le contexte Docker CLI doit être `default` (et non `desktop-linux`, qui échoue avec `protocol not available` depuis WSL). Vérifiez avec `docker context ls` et basculez avec `docker context use default` si besoin.
 
 ---
 
