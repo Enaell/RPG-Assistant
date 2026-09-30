@@ -112,8 +112,8 @@ async function handleStart(interaction: ChatInputCommandInteraction): Promise<vo
       '🎙️ **Début de session RPG — Capture audio activée**\n' +
       `Salon vocal : <#${voiceChannel.id}> | Maître du Jeu : <@${gmUser.id}>\n` +
       '> ⚠️ En restant dans le salon vocal, vous consentez à la capture de vos ' +
-      "prises de parole à des fins de transcription. L'audio est transcrit en temps " +
-      "réel et n'est pas conservé. Utilisez `/session stop` pour arrêter.",
+      "prises de parole à des fins de transcription. L'audio est transcrit par " +
+      "segments courts et n'est jamais conservé. Utilisez `/session stop` pour arrêter.",
     );
   }
 
@@ -173,6 +173,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 
   const duration = formatDuration(info.startedAt, new Date().toISOString());
   const gms = info.gmUserIds.map((id) => `<@${id}>`).join(', ');
+  const failures = sessionManager.getDispatchFailureCount();
 
   await interaction.reply({
     content:
@@ -180,7 +181,8 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
       `ID : \`${info.id}\`\n` +
       `Canal : <#${info.channelId}>\n` +
       `Durée : ${duration}\n` +
-      `MJ(s) : ${gms}`,
+      `MJ(s) : ${gms}` +
+      (failures > 0 ? `\n⚠️ ${failures} échec(s) de traitement audio (voir les logs)` : ''),
     ephemeral: true,
   });
 }
@@ -293,6 +295,7 @@ async function handleTranscribe(
       `✅ **Transcription terminée** — session \`${session.id.slice(0, 8)}…\`\n` +
       `📝 ${result.processed} utterance(s) transcrite(s) et sauvegardées en base\n` +
       (result.skipped > 0 ? `⚠️ ${result.skipped} fichier(s) ignoré(s) (silence ou erreur STT)\n` : '') +
+      (result.duplicates > 0 ? `↩️ ${result.duplicates} fichier(s) déjà transcrit(s) lors d'un run précédent, ignoré(s)\n` : '') +
       (result.transcriptPath ? `📄 Export texte : \`${result.transcriptPath}\`\n` : '') +
       `\nUtilisez les données dans \`transcript_lines\` pour générer un résumé de séance.`;
 
@@ -318,8 +321,10 @@ async function handleTranscribe(
  * absent from the DB, so it becomes transcribable and shows up in
  * `/session list` afterwards. guildId/channelId/gmUserIds cannot be recovered
  * from WAV filenames alone, so placeholder values are used.
+ *
+ * Exported for unit testing.
  */
-async function recoverOrphanedSession(
+export async function recoverOrphanedSession(
   rawId: string,
   recordingsDir: string,
 ): Promise<Session | undefined> {

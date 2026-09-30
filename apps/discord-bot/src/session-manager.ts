@@ -23,6 +23,8 @@ type ActiveState = {
   session: Session;
   connection: VoiceConnection;
   receiver: VoiceAudioReceiver;
+  /** Count of dispatchAudioSegment() calls that rejected (network/API errors). */
+  dispatchFailures: number;
 };
 
 // ── Singleton state ──────────────────────────────────────────
@@ -46,7 +48,17 @@ function onAudioSegment(segment: AudioSegment): void {
     `| ${duration}s | ${size} KB WAV`,
   );
 
-  void dispatchAudioSegment(segment);
+  // dispatchAudioSegment() is async (network/DB I/O) — it must never be
+  // fired-and-forgotten without a rejection handler, or a transient network
+  // error becomes an unhandled promise rejection that can crash the process.
+  dispatchAudioSegment(segment).catch((err: unknown) => {
+    if (state !== null) state.dispatchFailures++;
+    console.error(
+      `❌ [dispatch] Échec du traitement audio pour [${segment.displayName}${role}] ` +
+      `(segment ${segment.segmentId}):`,
+      err instanceof Error ? err.message : err,
+    );
+  });
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -91,7 +103,7 @@ async function start(options: StartOptions): Promise<Session> {
     void handleDisconnect(options.connection);
   });
 
-  state = { session, connection: options.connection, receiver };
+  state = { session, connection: options.connection, receiver, dispatchFailures: 0 };
   console.log(`🎮 Session ${session.id} started (channel: ${session.channelId})`);
 
   // Persist the new session
@@ -143,7 +155,12 @@ function getStatus(): Session | null {
   return state?.session ?? null;
 }
 
-export const sessionManager = { start, stop, isActive, getStatus };
+/** Number of audio segments that failed to dispatch (network/API errors) since session start. */
+function getDispatchFailureCount(): number {
+  return state?.dispatchFailures ?? 0;
+}
+
+export const sessionManager = { start, stop, isActive, getStatus, getDispatchFailureCount };
 
 // ── Helpers ──────────────────────────────────────────────────
 

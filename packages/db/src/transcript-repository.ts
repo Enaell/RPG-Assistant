@@ -14,6 +14,7 @@ type TranscriptRow = {
   end_timestamp: string;
   is_gm: number; // SQLite stores booleans as 0/1
   created_at: string;
+  source_file: string | null;
 };
 
 // ── Repository ───────────────────────────────────────────────────────────────
@@ -22,15 +23,16 @@ export class TranscriptRepository {
   private readonly stmtInsert: Database.Statement;
   private readonly stmtFindBySession: Database.Statement;
   private readonly stmtCountBySession: Database.Statement;
+  private readonly stmtExistsBySessionAndSourceFile: Database.Statement;
 
   constructor(db: Database.Database) {
     this.stmtInsert = db.prepare(`
-      INSERT INTO transcript_lines
+      INSERT OR IGNORE INTO transcript_lines
         (id, session_id, speaker_id, speaker_name, display_name,
-         text, start_timestamp, end_timestamp, is_gm)
+         text, start_timestamp, end_timestamp, is_gm, source_file)
       VALUES
         (@id, @session_id, @speaker_id, @speaker_name, @display_name,
-         @text, @start_timestamp, @end_timestamp, @is_gm)
+         @text, @start_timestamp, @end_timestamp, @is_gm, @source_file)
     `);
 
     this.stmtFindBySession = db.prepare(`
@@ -42,11 +44,23 @@ export class TranscriptRepository {
     this.stmtCountBySession = db.prepare(`
       SELECT COUNT(*) AS count FROM transcript_lines WHERE session_id = ?
     `);
+
+    this.stmtExistsBySessionAndSourceFile = db.prepare(`
+      SELECT 1 FROM transcript_lines WHERE session_id = ? AND source_file = ? LIMIT 1
+    `);
   }
 
-  /** Persist a single transcribed utterance. */
-  save(line: TranscriptLine): void {
-    this.stmtInsert.run({
+  /**
+   * Persist a single transcribed utterance.
+   *
+   * Idempotent when `line.sourceFile` is set (post-session transcription):
+   * a duplicate `(sessionId, sourceFile)` pair is silently ignored thanks to
+   * the partial unique index, so re-running `/session transcribe` never
+   * inserts the same line twice. Returns `true` if a row was actually
+   * inserted, `false` if it was ignored as a duplicate.
+   */
+  save(line: TranscriptLine): boolean {
+    const result = this.stmtInsert.run({
       id: line.id,
       session_id: line.sessionId,
       speaker_id: line.speakerId,
@@ -56,7 +70,9 @@ export class TranscriptRepository {
       start_timestamp: line.startTimestamp,
       end_timestamp: line.endTimestamp,
       is_gm: line.isGM ? 1 : 0,
+      source_file: line.sourceFile ?? null,
     });
+    return result.changes > 0;
   }
 
   /** Retrieve all lines for a session, chronologically ordered. */
@@ -68,6 +84,16 @@ export class TranscriptRepository {
   countBySession(sessionId: string): number {
     const row = this.stmtCountBySession.get(sessionId) as { count: number; };
     return row.count;
+  }
+
+  /**
+   * True if a line from this exact WAV file was already transcribed and
+   * saved for this session. Used to skip re-transcribing (and re-billing
+   * the STT API for) files already processed by a previous `/session
+   * transcribe` run.
+   */
+  existsBySessionAndSourceFile(sessionId: string, sourceFile: string): boolean {
+    return this.stmtExistsBySessionAndSourceFile.get(sessionId, sourceFile) !== undefined;
   }
 }
 
@@ -84,5 +110,6 @@ function rowToLine(row: TranscriptRow): TranscriptLine {
     startTimestamp: row.start_timestamp,
     endTimestamp: row.end_timestamp,
     isGM: row.is_gm === 1,
+    sourceFile: row.source_file ?? undefined,
   };
 }

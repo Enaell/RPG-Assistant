@@ -30,6 +30,8 @@ export type TranscriberResult = {
   sessionId: string;
   processed: number;
   skipped: number;
+  /** Files skipped because they were already transcribed in a previous run. */
+  duplicates: number;
   lines: TranscriptLine[];
   /** Path to the plain-text transcript export, if any line was transcribed. */
   transcriptPath?: string;
@@ -70,6 +72,7 @@ export async function transcribeRecordingSession(
 
   const lines: TranscriptLine[] = [];
   let skipped = 0;
+  let duplicates = 0;
 
   for (let i = 0; i < files.length; i++) {
     const filename = files[i]!;
@@ -77,6 +80,14 @@ export async function transcribeRecordingSession(
 
     const match = WAV_RE.exec(filename);
     if (!match) { skipped++; continue; }
+
+    // Idempotency: re-running /session transcribe over the same recordings
+    // folder must not re-call the STT API nor duplicate rows for files
+    // already transcribed in a previous run.
+    if (repo.existsBySessionAndSourceFile(sessionId, filename)) {
+      duplicates++;
+      continue;
+    }
 
     const [, rawTs, sanitizedName] = match;
     // Restore ISO 8601 from the dashes-for-colons encoding (time part only)
@@ -104,13 +115,19 @@ export async function transcribeRecordingSession(
     };
 
     try {
-      const line = await transcribeWithRetry(client, segment, filename);
-      if (!line.text) {
+      const transcribed = await transcribeWithRetry(client, segment, filename);
+      if (!transcribed.text) {
         skipped++;
         continue;
       }
+      const line: TranscriptLine = { ...transcribed, sourceFile: filename };
       try {
-        repo.save(line);
+        const inserted = repo.save(line);
+        if (!inserted) {
+          // Lost a race against another run — the unique index caught it.
+          duplicates++;
+          continue;
+        }
       } catch (dbErr) {
         console.error(`[transcribe] DB save failed for ${filename}:`, dbErr);
       }
@@ -143,14 +160,16 @@ export async function transcribeRecordingSession(
     await writeFile(transcriptPath, `${content}\n`, 'utf-8');
   }
 
-  return { sessionId, processed: lines.length, skipped, lines, transcriptPath };
+  return { sessionId, processed: lines.length, skipped, duplicates, lines, transcriptPath };
 }
 
 /**
  * Transcribe one segment, retrying on HTTP 429 with exponential backoff
  * (honouring the API's `Retry-After` header when present).
+ *
+ * Exported for unit testing the retry/backoff behaviour in isolation.
  */
-async function transcribeWithRetry(
+export async function transcribeWithRetry(
   client: SttClient,
   segment: AudioSegment,
   filename: string,

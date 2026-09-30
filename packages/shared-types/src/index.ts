@@ -77,6 +77,12 @@ export type TranscriptLine = {
   /** ISO 8601 */
   endTimestamp: string;
   isGM: boolean;
+  /**
+   * Source WAV filename this line was transcribed from (post-session mode only).
+   * Undefined for real-time transcription. Used with `sessionId` to make
+   * re-running `/session transcribe` idempotent (no duplicate rows).
+   */
+  sourceFile?: string;
 };
 
 // ============================================================

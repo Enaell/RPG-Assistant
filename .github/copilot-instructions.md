@@ -39,10 +39,11 @@ assets/
 ## Tech Stack
 
 - **Language**: TypeScript 5+ (strict mode, no `any` without justification)
-- **Runtime**: Node.js 20+ (LTS)
+- **Runtime**: Node.js 22.12+ (LTS)
 - **Package manager**: pnpm with workspaces
 - **Discord**: discord.js v14 + @discordjs/voice
-- **STT (Phase 1-2)**: Voxtral API (Mistral); fallback: OpenAI Whisper API
+- **STT (Phase 1)**: Voxtral batch API (Mistral, `POST /v1/audio/transcriptions`, modèle `voxtral-mini-latest`); fallback: OpenAI Whisper API
+- **STT realtime (future)**: `voxtral-mini-transcribe-realtime-2602` is reserved for the realtime/WebSocket API and must not be used with the batch endpoint
 - **STT (Phase 3)**: faster-whisper Python microservice exposed as REST
 - **LLM (Phase 1-2)**: Mistral API (mistral-large or mistral-small)
 - **LLM (Phase 3)**: Ollama local (REST API, no Python binding needed)
@@ -177,7 +178,7 @@ The state machine emits events consumed by the orchestrator. No direct calls fro
 
 When asked to implement features, respect this phasing:
 
-- **Phase 1 (MVP)**: Discord bot audio capture → `AUDIO_OUTPUT_MODE=local` (WAV sur disque) ou `AUDIO_OUTPUT_MODE=stt` (transcription temps réel Voxtral) → `/session transcribe` (transcription post-séance des WAV locaux) → SQLite logging (sessions + transcript_lines) → Mistral API LLM → basic orchestration (music + image) → GM Dashboard
+- **Phase 1 (MVP)**: Discord bot audio capture → `AUDIO_OUTPUT_MODE=local` (WAV sur disque) ou `AUDIO_OUTPUT_MODE=stt` (transcription via Voxtral batch HTTP) → `/session transcribe` (transcription post-séance des WAV locaux, avec export `transcript.txt`) → SQLite logging (sessions + transcript_lines) → Mistral API LLM → basic orchestration (music + image) → GM Dashboard
 - **Phase 2**: Speaker diarization, keyword triggers, `/scene` commands, OBS WebSocket, session summaries
 - **Phase 3**: Local STT (Whisper microservice), local LLM (Ollama), semantic asset search
 
@@ -192,6 +193,11 @@ Do not implement Phase 2 or 3 features during Phase 1 work unless explicitly ask
 - No tests for: Discord.js internals, third-party API behavior
 - Test files colocated with source: `src/context-manager.test.ts`
 - Use `vitest` with `@vitest/coverage-v8`
+- Existing Phase 1 coverage (as of this note): PCM→WAV conversion, WAV sorting/transcription in
+  `post-session-transcriber.ts`, STT 429 retry/backoff + `Retry-After` handling, orphaned session
+  recovery (`recoverOrphanedSession`), session-manager start/stop/reconnect transitions, STT response
+  Zod validation. Run `pnpm -r build` before `pnpm -r test` after touching a `packages/*` source file —
+  tests resolve `@rpg-assistant/*` workspace imports through `dist/`, not `src/`.
 
 ---
 
@@ -200,13 +206,10 @@ Do not implement Phase 2 or 3 features during Phase 1 work unless explicitly ask
 - **Do not** call the LLM on every audio chunk — buffer transcriptions until a sentence boundary or silence gap
 - **Do not** store raw audio to disk — transcribe in memory and discard
 - **Do not** expose the orchestrator HTTP port publicly — it's localhost only
-- **Do not** trust LLM JSON output without Zod validation — models can hallucinate invalid structures
-- **Do not** hardcode asset paths — use the asset library index (SQLite)
-- **Always** handle Discord voice connection drops with exponential backoff reconnect
+- **STT batch vs realtime**: use `voxtral-mini-latest` with `POST /v1/audio/transcriptions`; do not configure a realtime/WebSocket model for this endpoint. The Zod env schema (`index.ts`) rejects any `STT_MODEL` containing `realtime` at startup.
+- **STT rate limits**: post-session transcription spaces requests and retries HTTP 429 responses with exponential backoff, honoring `Retry-After`
+- **Post-session export**: `/session transcribe` writes `transcript.txt` beside the WAV files and also persists transcript lines in SQLite
+- **Idempotent retranscription**: each `transcript_lines` row is keyed by `(session_id, source_file)` via a partial unique index (real-time lines have `source_file = NULL` and are unaffected). Re-running `/session transcribe` skips files already transcribed instead of re-calling the STT API and duplicating rows — see `TranscriptRepository.existsBySessionAndSourceFile`.
+- **Real-time dispatch errors**: `session-manager.ts` never fires-and-forgets `dispatchAudioSegment()` — rejections are caught, logged, and counted (`sessionManager.getDispatchFailureCount()`, surfaced in `/session status`). Keep this pattern for any other async work triggered from voice event handlers.
+- **Config validation**: all `apps/discord-bot` env vars (including `AUDIO_OUTPUT_MODE`, `DB_PATH`, and the conditional `MISTRAL_API_KEY` requirement) are validated once via Zod in `index.ts` before `bot.ts` is imported. Downstream modules (`audio-output.ts`, `database.ts`) trust `process.env` because of this ordering — do not re-validate ad hoc.
 - **`RECORDINGS_DIR`/`DB_PATH` are resolved against `process.cwd()`**, which differs between `pnpm dev:bot` (cwd = `apps/discord-bot/`) and Docker (cwd = `/app`, bind-mounted/volumed to the repo root). A session recorded in one environment is invisible to the bot in the other — always check the `📁 Répertoire d'enregistrements : …` startup log to know where a given run actually reads/writes. See README § "Chemins de stockage : local vs Docker".
-- **Never use a `*-realtime-*` STT model (e.g. `voxtral-mini-transcribe-realtime-2602`) for batch transcription.** The `/v1/audio/transcriptions` endpoint (used by `AUDIO_OUTPUT_MODE=stt` and `/session transcribe`) only accepts `voxtral-mini-latest` (Voxtral Mini Transcribe 2) — realtime models are WebSocket-only and return HTTP 400 `invalid_model`. Only use realtime models if implementing actual WebSocket streaming (Phase 2).
-- **Every env var read via `env.X` (the Zod-validated `Env` type in `apps/discord-bot/src/index.ts`) must be declared in `envSchema`.** `tsx` (used by `pnpm dev:bot`) does not type-check, so a missing field only surfaces as a `tsc` error during `docker compose build` — always run `pnpm exec tsc --noEmit` in the affected package after adding a new `env.X` usage.
-- **`/session transcribe` retries HTTP 429 (rate limit) responses automatically** with exponential backoff (honoring `Retry-After`) and throttles requests between files (`packages/stt-client`'s `SttError.retryAfterMs` + `apps/discord-bot/src/post-session-transcriber.ts`'s `transcribeWithRetry`). Keep this logic when touching either file — sessions can have hundreds of short utterances and will hit Mistral's rate limit without it.
-
-
-Note : à l'avenir, utilise PowerShell (et non WSL) pour les commandes pnpm install/pnpm add sur ce projet. Les deux environnements peuvent coexister pour le reste (WSL pour les scripts, PowerShell pour la gestion des packages).

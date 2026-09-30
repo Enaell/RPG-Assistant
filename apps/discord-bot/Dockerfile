@@ -5,7 +5,7 @@
 # to produce a self-contained directory with only production dependencies.
 # This is the standard approach for pnpm monorepos in Docker.
 # ══════════════════════════════════════════════════════════════════════════════
-FROM node:20-slim AS builder
+FROM node:22.12-slim AS builder
 
 # Enable corepack to get pnpm without a separate install step
 RUN corepack enable && corepack prepare pnpm@9 --activate
@@ -49,7 +49,7 @@ RUN pnpm --filter @rpg-assistant/discord-bot deploy --prod /deploy/discord-bot
 # Minimal image with only the compiled app and its production dependencies.
 # No TypeScript, no dev tools, no source files from other packages.
 # ══════════════════════════════════════════════════════════════════════════════
-FROM node:20-slim AS runtime
+FROM node:22.12-slim AS runtime
 
 # Run as non-root for security
 RUN groupadd --gid 1001 nodejs \

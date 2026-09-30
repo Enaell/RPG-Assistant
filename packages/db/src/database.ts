@@ -23,6 +23,7 @@ export function openDatabase(filePath: string): Database.Database {
   db.pragma('foreign_keys = ON');
 
   applySchema(db);
+  applyMigrations(db);
 
   return db;
 }
@@ -62,5 +63,29 @@ function applySchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_transcript_speaker
       ON transcript_lines(speaker_id);
+  `);
+}
+
+/**
+ * Schema changes applied after the initial CREATE TABLE — kept separate
+ * because `ALTER TABLE ADD COLUMN` isn't idempotent via `IF NOT EXISTS`,
+ * unlike CREATE TABLE/INDEX above. Safe to run on every startup.
+ */
+function applyMigrations(db: Database.Database): void {
+  const columns = db.prepare('PRAGMA table_info(transcript_lines)').all() as Array<{ name: string; }>;
+  const hasSourceFile = columns.some((c) => c.name === 'source_file');
+
+  if (!hasSourceFile) {
+    // Source WAV filename (post-session transcription only, NULL for real-time lines).
+    db.exec('ALTER TABLE transcript_lines ADD COLUMN source_file TEXT');
+  }
+
+  // Partial unique index: prevents duplicate rows when /session transcribe is
+  // re-run over the same recordings folder. Only applies to non-NULL values,
+  // so real-time transcription (no source file) is unaffected.
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_transcript_session_source
+      ON transcript_lines(session_id, source_file)
+      WHERE source_file IS NOT NULL;
   `);
 }

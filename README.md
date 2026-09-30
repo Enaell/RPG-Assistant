@@ -56,7 +56,8 @@ Enregistrer des conversations vocales Discord implique :
 ### ✅ Voxtral : bon choix de départ
 
 Mistral Voxtral (sorti en 2025) est un excellent choix pour démarrer via API. Points d'attention :
-- Vérifier la disponibilité et latence de l'endpoint **streaming/realtime** au moment du dev
+- Le client actuel utilise `POST /v1/audio/transcriptions` avec `voxtral-mini-latest` pour les WAV bufferisés
+- Le modèle `voxtral-mini-transcribe-realtime-2602` est réservé à l'API realtime/WebSocket et ne doit pas être configuré pour `/session transcribe`
 - Avoir un fallback préparé : **Whisper via API OpenAI** ou **faster-whisper en local** (Python microservice léger)
 - Whisper fonctionnant hors-ligne, c'est le candidat naturel pour la Phase 3 locale
 
@@ -177,11 +178,15 @@ graph TD
 - [x] Notice de consentement automatique dans le canal texte
 - [x] Reconnexion automatique en cas de déconnexion vocale
 - [x] `AUDIO_OUTPUT_MODE=local` — sauvegarde des `.wav` horodatés sur disque
-- [x] `AUDIO_OUTPUT_MODE=stt` — transcription temps réel via l'API Voxtral Mistral
+- [x] `AUDIO_OUTPUT_MODE=stt` — transcription par segments courts (une utterance = un appel HTTP) via l'endpoint batch Voxtral Mistral
 - [x] `packages/stt-client` — appel `POST /v1/audio/transcriptions` + validation Zod
 - [x] `packages/db` — SQLite (`better-sqlite3`) : tables `sessions` + `transcript_lines`
 - [x] Persistance des sessions (start/stop) et des lignes de transcript en base
-- [x] `/session transcribe` — **transcription post-séance** : envoie les WAV locaux à l'API STT par ordre chronologique et sauvegarde le résultat en base, avec retry automatique + backoff exponentiel sur rate limit (HTTP 429)
+- [x] `/session transcribe` — **transcription post-séance** : envoie les WAV locaux à l'API STT par ordre chronologique et sauvegarde le résultat en base
+- [x] Idempotence de `/session transcribe` : chaque ligne est liée à `(session_id, fichier WAV source)` via un index unique — relancer la commande ne duplique jamais les lignes déjà transcrites
+- [x] Traitement d'erreur + compteur d'échecs sur le dispatch audio en direct (`session-manager`), visible dans `/session status`
+- [x] Validation Zod complète de la configuration (`AUDIO_OUTPUT_MODE`, `DB_PATH`, `MISTRAL_API_KEY` conditionnel, rejet des modèles STT realtime sur l'endpoint batch)
+- [x] Tests unitaires Vitest : conversion PCM→WAV, tri/transcription des WAV, retries HTTP 429/`Retry-After`, récupération des sessions orphelines, transitions start/stop/reconnexion, validation des réponses STT
 - [ ] `packages/context-manager` — state machine (scène, ambiance, historique)
 - [ ] `packages/llm-agent` — appel Mistral API → JSON actions validé par Zod
 - [ ] `apps/orchestrator` — dispatch des actions JSON
@@ -255,7 +260,7 @@ AudioSegment.wavBuffer        ← prêt pour l'appel STT
 | Language principal | TypeScript 5+ | Strict mode |
 | Package manager | pnpm workspaces | Monorepo |
 | Discord bot | discord.js v14 + @discordjs/voice | |
-| STT Phase 1-2 | Voxtral API (Mistral) | Fallback: Whisper API OpenAI |
+| STT Phase 1 | Voxtral batch API (Mistral) | `POST /v1/audio/transcriptions`, fallback prévu : Whisper API OpenAI |
 | STT Phase 3 | faster-whisper (Python µservice) | REST interne |
 | LLM Phase 1-2 | Mistral API | mistral-large ou mistral-small |
 | LLM Phase 3 | Ollama (llama3, mistral local) | API REST nativement compatible |
@@ -271,7 +276,7 @@ AudioSegment.wavBuffer        ← prêt pour l'appel STT
 
 ### Prérequis
 
-- **Node.js** ≥ 20 ([nodejs.org](https://nodejs.org))
+- **Node.js** ≥ 22.12 ([nodejs.org](https://nodejs.org))
 - **pnpm** ≥ 9 — `npm install -g pnpm`
 - Un **serveur Discord** où vous avez les droits d'admin
 - Un compte [Discord Developer Portal](https://discord.com/developers/applications)
@@ -317,12 +322,14 @@ RECORDINGS_DIR=./recordings
 
 | Variable | Valeurs | Description |
 |---|---|---|
-| `AUDIO_OUTPUT_MODE` | `local` / `stt` | `local` : enregistre les WAV horodatés sur disque (utilisables ensuite avec `/session transcribe`). `stt` : transcription temps réel via Voxtral. |
+| `AUDIO_OUTPUT_MODE` | `local` / `stt` | `local` : enregistre les WAV horodatés sur disque (utilisables ensuite avec `/session transcribe`). `stt` : envoie chaque utterance (segment court délimité par un silence) à l'endpoint batch Voxtral dès qu'elle est captée — ce n'est **pas** un flux streaming/WebSocket temps réel, juste des appels HTTP fréquents et rapprochés. |
 | `RECORDINGS_DIR` | chemin relatif ou absolu | Répertoire de destination quand `AUDIO_OUTPUT_MODE=local`. Défaut : `./recordings`. |
-| `MISTRAL_API_KEY` | clé API | Requis pour `AUDIO_OUTPUT_MODE=stt` **et** pour `/session transcribe`. |
-| `STT_MODEL` | voir `.env.example` | Modèle Voxtral utilisé pour la transcription. Défaut : `voxtral-mini-latest`. ⚠️ Les modèles `*-realtime-*` (ex. `voxtral-mini-transcribe-realtime-2602`) sont réservés au streaming WebSocket et renvoient une erreur HTTP 400 `invalid_model` sur l'endpoint batch `/v1/audio/transcriptions` utilisé par `/session transcribe`. |
+| `MISTRAL_API_KEY` | clé API | Requis pour `AUDIO_OUTPUT_MODE=stt` **et** pour `/session transcribe`. Validé par Zod au démarrage : obligatoire dès que `AUDIO_OUTPUT_MODE=stt`. |
+| `STT_MODEL` | `voxtral-mini-latest` | Modèle Voxtral batch utilisé par `POST /v1/audio/transcriptions`. Le schéma de validation Zod rejette au démarrage tout modèle dont le nom contient `realtime` (réservé à l'API WebSocket, non implémentée ici). |
 | `STT_LANGUAGE` | `fr`, `en`… | Hint de langue pour améliorer la précision. Laisser vide = auto-détection. |
-| `DB_PATH` | chemin | Fichier SQLite des sessions et transcripts. Défaut : `./data/rpg-assistant.db`. |
+| `DB_PATH` | chemin | Fichier SQLite des sessions et transcripts. Défaut : `./data/rpg-assistant.db`. Fait partie du schéma de validation Zod (`index.ts`). |
+
+> ℹ️ Toutes les variables ci-dessus (types, valeurs autorisées, valeurs par défaut et dépendances conditionnelles comme `MISTRAL_API_KEY`) sont validées avec Zod au démarrage du bot (`apps/discord-bot/src/index.ts`) — une configuration invalide arrête le processus immédiatement avec un message d'erreur explicite plutôt que d'échouer plus tard au runtime.
 
 > ⚠️ `AUDIO_OUTPUT_MODE=local` persiste l'audio brut sur disque. Ne jamais utiliser en production.
 
@@ -414,7 +421,35 @@ ou pour une session spécifique :
 ```
 Le bot lit les WAV dans `recordings/<sessionId>/` dans l'ordre chronologique, les envoie un par un à l'API Voxtral et sauvegarde chaque réplique en base de données. Un export texte lisible est aussi écrit dans `recordings/<sessionId>/transcript.txt` (une ligne `[horodatage] Locuteur: texte` par réplique) pour être exploité directement sans passer par SQLite.
 
-Sur les sessions de plusieurs centaines de répliques, l'API Mistral peut renvoyer `429 Rate limit exceeded`. Ce cas est géré automatiquement : chaque fichier attend un court délai (300 ms) avant l'envoi suivant, et un 429 déclenche jusqu'à 5 nouvelles tentatives avec backoff exponentiel (2s, 4s, 8s… jusqu'à 30s), en respectant l'en-tête `Retry-After` renvoyé par l'API quand il est présent. Aucune action manuelle n'est requise — la commande peut simplement prendre plus de temps sur une grosse session.
+Le traitement espace les requêtes de 300 ms et retente automatiquement les réponses HTTP 429 avec un backoff, en respectant l'en-tête `Retry-After` lorsque l'API le fournit. Les fichiers en erreur sont comptabilisés comme ignorés afin que la transcription puisse terminer les autres fichiers.
+
+**Idempotence** : chaque ligne de transcript post-séance est identifiée par la paire `(session_id, fichier WAV)`, protégée par un index unique en base. Relancer `/session transcribe` sur une session déjà (partiellement) transcrite ne réappelle donc pas l'API STT pour les fichiers déjà traités et ne duplique jamais leurs lignes — seuls les fichiers manquants sont transcrits. Le résumé de la commande distingue les répliques traitées, ignorées (silence/erreur STT) et déjà transcrites lors d'un run précédent.
+
+---
+
+## Tests
+
+Le projet utilise [Vitest](https://vitest.dev/). Chaque package a son propre script `test` (`pnpm --filter <package> test`) ; `pnpm test` à la racine lance la suite complète via `pnpm -r test`.
+
+```bash
+pnpm test                                    # toute la suite
+pnpm --filter @rpg-assistant/discord-bot test
+pnpm --filter @rpg-assistant/db test
+pnpm --filter @rpg-assistant/stt-client test
+```
+
+Couverture actuelle :
+
+| Package | Fichier(s) de test | Couvre |
+|---|---|---|
+| `apps/discord-bot` | `voice/pcm-to-wav.test.ts` | Conversion PCM → WAV, stéréo → mono, décimation 48kHz→16kHz |
+| `apps/discord-bot` | `post-session-transcriber.test.ts` | Tri chronologique des WAV, retries HTTP 429 + `Retry-After`, idempotence (skip des fichiers déjà transcrits) |
+| `apps/discord-bot` | `commands/session.test.ts` | Récupération des sessions orphelines (`recoverOrphanedSession`) |
+| `apps/discord-bot` | `session-manager.test.ts` | Transitions start/stop, reconnexion vocale (succès/échec), traitement d'erreur + compteur d'échecs du dispatch audio |
+| `packages/stt-client` | `client.test.ts` | Appel HTTP Voxtral, mapping de réponse, erreurs réseau/HTTP (429 + `Retry-After`), validation Zod de la réponse |
+| `packages/db` | `transcript-repository.test.ts` | Persistance des lignes de transcript, idempotence `(session_id, source_file)` |
+
+Les tests s'appuient sur les packages `dist/` déjà construits (imports `@rpg-assistant/*`) — exécutez `pnpm -r build` après avoir modifié un package partagé avant de relancer les tests d'un package consommateur.
 
 ---
 
@@ -474,9 +509,6 @@ Les secrets (`.env`) ne sont **jamais** intégrés dans l'image — ils sont inj
 - **`Cannot find module '@rpg-assistant/shared-types'` pendant `docker compose build`** : un fichier `tsconfig.tsbuildinfo` (cache incrémental TypeScript) généré côté host s'est retrouvé dans le contexte de build. Comme les packages utilisent `composite: true`, `tsc` fait confiance à ce cache et saute l'émission de `dist/`. `.dockerignore` exclut désormais `**/*.tsbuildinfo` — si l'erreur revient, vérifiez que ce fichier n'est plus copié dans l'image.
 - **Erreur native `better-sqlite3` / binding manquant au runtime** : vérifiez que `pnpm-workspace.yaml` a bien `allowBuilds.better-sqlite3: true`. Si c'est `false`, le script d'installation qui compile/télécharge le binding natif ne s'exécute pas.
 - **`docker compose build` ne produit aucune sortie dans un terminal WSL** : le contexte Docker CLI doit être `default` (et non `desktop-linux`, qui échoue avec `protocol not available` depuis WSL). Vérifiez avec `docker context ls` et basculez avec `docker context use default` si besoin.
-- **`Cannot find module 'xyz'` dans VS Code uniquement (le build en terminal fonctionne)** : pnpm crée des symlinks dans `node_modules`. S'ils ont été créés via `pnpm install` lancé depuis WSL sur un projet situé sur le disque Windows (`/mnt/c/...`), ce sont des symlinks Linux que le serveur TypeScript de VS Code **côté Windows natif** ne peut pas résoudre. Corrigez en relançant `pnpm install` depuis **PowerShell** (voir note en bas de `.github/copilot-instructions.md`), ou en rouvrant le dossier en fenêtre **WSL Remote** dans VS Code.
-- **Erreur `tsc` : `Property 'X' does not exist on type '{ DISCORD_TOKEN: ...; NODE_ENV: ... }'`** : une variable d'environnement est lue via `env.X` (le type `Env` validé par Zod dans `apps/discord-bot/src/index.ts`) sans avoir été déclarée dans `envSchema`. `tsx` (utilisé par `pnpm dev:bot`) ne type-check pas et laisse passer l'erreur ; seul `tsc`/le build Docker la détecte. Ajoutez le champ manquant à `envSchema`.
-- **`HTTP 429 Rate limit exceeded` pendant `/session transcribe`** : géré automatiquement depuis peu (retry + backoff exponentiel, voir section transcription post-séance ci-dessus). Si l'erreur persiste malgré les 5 tentatives, la clé `MISTRAL_API_KEY` a probablement atteint son quota/tier — vérifiez le compte Mistral.
 
 ---
 
