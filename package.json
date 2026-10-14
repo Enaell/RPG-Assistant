@@ -6,6 +6,8 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev:bot": "pnpm --filter @rpg-assistant/discord-bot dev",
+    "dev:orchestrator": "pnpm --filter @rpg-assistant/orchestrator dev",
+    "dev:dashboard": "pnpm --filter @rpg-assistant/gm-dashboard dev",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "clean": "find . -name dist -not -path '*/node_modules/*' -exec rm -rf {} +"

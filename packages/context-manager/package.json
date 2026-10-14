@@ -1,0 +1,22 @@
+{
+  "name": "@rpg-assistant/context-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session state machine — scene, mood, transcript history, active music/image",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rpg-assistant/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.2.0"
+  }
+}

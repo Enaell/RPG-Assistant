@@ -15,14 +15,15 @@ This is a **pnpm workspace monorepo** with the following apps and packages:
 ```
 apps/
   discord-bot/        Entry point for Discord voice capture and slash commands
-  orchestrator/       Receives JSON action payloads, dispatches to subsystems
-  gm-dashboard/       React web UI for the Game Master (images, music, tips)
+  orchestrator/       Local HTTP API — receives AgentResponse, dispatches actions (music/image/gm_tip/rule_help)
+  gm-dashboard/        React + Vite web UI for the Game Master (images, music, tips) — polls the orchestrator
   session-summarizer/ Post-session summary and next-session prep generator
 
 packages/
   stt-client/         Abstraction over STT backends (Voxtral API / Whisper local)
-  llm-agent/          Abstraction over LLM backends (Mistral API / Ollama)
+  llm-agent/          Abstraction over LLM backends (Mistral chat API / Ollama), prompt + Zod validation
   context-manager/    Session state machine (scene, mood, active music, history)
+  db/                 SQLite persistence (sessions, transcript_lines)
   asset-library/      Music and image library with semantic search
   shared-types/       Shared TypeScript types across all packages
 
@@ -184,20 +185,30 @@ When asked to implement features, respect this phasing:
 
 Do not implement Phase 2 or 3 features during Phase 1 work unless explicitly asked.
 
+`packages/context-manager`, `packages/llm-agent`, `apps/orchestrator` and `apps/gm-dashboard` now exist
+as standalone, independently tested units (Phase 1 scope), but are **not wired together end-to-end**:
+nothing in `discord-bot` calls `context-manager` yet, `context-manager` isn't connected to `llm-agent`,
+and nothing calls the orchestrator's `POST /actions` in real conditions. That wiring (an HTTP client in
+`discord-bot`, a polling/keyword trigger loop per ADR-004, and failure handling for that chain) is a
+deliberately separate, not-yet-done task — don't assume the pipeline is live just because the pieces exist.
+
 ---
 
 ## Testing Strategy
 
 - Unit tests for: context-manager state transitions, Zod schema validation, asset library search
 - Integration tests for: STT client (mocked API), LLM agent (mocked API), orchestrator dispatch
-- No tests for: Discord.js internals, third-party API behavior
+- No tests for: Discord.js internals, third-party API behavior, the `gm-dashboard` React UI (Vite app,
+  not covered by `pnpm -r test` — verified manually / via `vite build` only)
 - Test files colocated with source: `src/context-manager.test.ts`
 - Use `vitest` with `@vitest/coverage-v8`
 - Existing Phase 1 coverage (as of this note): PCM→WAV conversion, WAV sorting/transcription in
   `post-session-transcriber.ts`, STT 429 retry/backoff + `Retry-After` handling, orphaned session
   recovery (`recoverOrphanedSession`), session-manager start/stop/reconnect transitions, STT response
-  Zod validation. Run `pnpm -r build` before `pnpm -r test` after touching a `packages/*` source file —
-  tests resolve `@rpg-assistant/*` workspace imports through `dist/`, not `src/`.
+  Zod validation, context-manager state transitions/events, llm-agent prompt building + AgentError
+  cases (invalid JSON, schema failure, timeout, retry), orchestrator action dispatch/dedup + HTTP layer
+  (`state.test.ts`, `server.test.ts`). Run `pnpm -r build` before `pnpm -r test` after touching a
+  `packages/*` source file — tests resolve `@rpg-assistant/*` workspace imports through `dist/`, not `src/`.
 
 ---
 
@@ -213,3 +224,9 @@ Do not implement Phase 2 or 3 features during Phase 1 work unless explicitly ask
 - **Real-time dispatch errors**: `session-manager.ts` never fires-and-forgets `dispatchAudioSegment()` — rejections are caught, logged, and counted (`sessionManager.getDispatchFailureCount()`, surfaced in `/session status`). Keep this pattern for any other async work triggered from voice event handlers.
 - **Config validation**: all `apps/discord-bot` env vars (including `AUDIO_OUTPUT_MODE`, `DB_PATH`, and the conditional `MISTRAL_API_KEY` requirement) are validated once via Zod in `index.ts` before `bot.ts` is imported. Downstream modules (`audio-output.ts`, `database.ts`) trust `process.env` because of this ordering — do not re-validate ad hoc.
 - **`RECORDINGS_DIR`/`DB_PATH` are resolved against `process.cwd()`**, which differs between `pnpm dev:bot` (cwd = `apps/discord-bot/`) and Docker (cwd = `/app`, bind-mounted/volumed to the repo root). A session recorded in one environment is invisible to the bot in the other — always check the `📁 Répertoire d'enregistrements : …` startup log to know where a given run actually reads/writes. See README § "Chemins de stockage : local vs Docker".
+- **`ContextManager` states are single-use**: `ENDED` is terminal by design (matches the state diagram above) — do not try to `start()` the same instance again for a new session; construct a new `ContextManager()` instead, mirroring how `session-manager.ts` creates a new `Session` object per `/session start`.
+- **`AgentResponseSchema` lives in `packages/llm-agent`**, not `shared-types` — `shared-types` only has the plain `AgentResponse`/`AgentAction` TS types (no Zod dependency, per its "zero runtime dependencies" rule). Both `llm-agent` (parsing the LLM's raw JSON) and `apps/orchestrator` (validating `POST /actions` bodies) import and reuse the same schema — don't duplicate it.
+- **`apps/orchestrator` binds to `127.0.0.1` explicitly** in `index.ts` — never change this to `0.0.0.0` or an external interface; this API must stay local-only per the privacy requirements above.
+- **Orchestrator dedup is per-action-type equality + a time window** (`DEDUP_WINDOW_MS`, default 4000ms), not a global request dedup — a `music` action and a `gm_tip` action in the same `AgentResponse` are deduped independently against their own last-dispatched state (see `apps/orchestrator/src/handlers.ts`).
+- **`GET /transcript/recent` on the orchestrator reads the same SQLite file as `discord-bot`** via `@rpg-assistant/db` (read-only from this process) — it does **not** go through `AgentResponse`, which has no transcript field. Requires the orchestrator's own `DB_PATH` env var to point at the same file; returns 503 if unset.
+- **`apps/gm-dashboard` is a standalone Vite app**: its `tsconfig.json` intentionally does **not** extend `tsconfig.base.json` (that one targets CommonJS with no DOM lib, wrong for a Vite/React app), and it's excluded from the `tsc`-based mental model of "build = compile" — its `build` script is `vite build`, not `tsc`. It also reads `import.meta.env.VITE_ORCHESTRATOR_URL`, which must live in `apps/gm-dashboard/.env.local` — **Vite does not read the monorepo-root `.env`**.

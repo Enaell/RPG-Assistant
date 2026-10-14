@@ -13,6 +13,8 @@ RPG-Assistant transforme une session de JdR en une expérience immersive augment
 - **Orchestrateur** qui exécute les actions sur Discord, OBS, et un dashboard web
 - **Journaliste de campagne** : résumés automatiques, préparation des prochaines séances
 
+> 📋 Pour une description fonctionnelle détaillée de chaque partie du projet (ce qu'elle fait, pour qui, selon quelles règles) et des specs à venir, voir [docs/specs/](docs/specs/README.md).
+
 ---
 
 ## Analyse & Challenges
@@ -187,10 +189,11 @@ graph TD
 - [x] Traitement d'erreur + compteur d'échecs sur le dispatch audio en direct (`session-manager`), visible dans `/session status`
 - [x] Validation Zod complète de la configuration (`AUDIO_OUTPUT_MODE`, `DB_PATH`, `MISTRAL_API_KEY` conditionnel, rejet des modèles STT realtime sur l'endpoint batch)
 - [x] Tests unitaires Vitest : conversion PCM→WAV, tri/transcription des WAV, retries HTTP 429/`Retry-After`, récupération des sessions orphelines, transitions start/stop/reconnexion, validation des réponses STT
-- [ ] `packages/context-manager` — state machine (scène, ambiance, historique)
-- [ ] `packages/llm-agent` — appel Mistral API → JSON actions validé par Zod
-- [ ] `apps/orchestrator` — dispatch des actions JSON
-- [ ] `apps/gm-dashboard` — interface web MJ (React + Vite)
+- [x] `packages/context-manager` — state machine (scène, ambiance, historique, musique/image actives) + événements typés
+- [x] `packages/llm-agent` — abstraction Mistral chat completions → `AgentResponse` validé par Zod (timeout, retry, comportement explicite sur JSON invalide)
+- [x] `apps/orchestrator` — API HTTP locale (127.0.0.1 uniquement) : validation + dispatch par type d'action, déduplication, état en mémoire
+- [x] `apps/gm-dashboard` — interface web MJ minimale (React + Vite) : scène/ambiance, conseil MJ, image/musique actives, transcription récente, statut de connexion
+- [ ] **Câblage bout-en-bout** : `discord-bot` → `context-manager` → `llm-agent` → `apps/orchestrator` (les 4 briques ci-dessus existent et sont testées isolément, mais rien ne les relie encore automatiquement — voir « Backend temps réel » ci-dessous)
 
 ### Phase 2 — Robustesse & Enrichissement
 
@@ -215,14 +218,15 @@ graph TD
 rpg-assistant/
 ├── apps/
 │   ├── discord-bot/          ✅ Bot Discord — capture vocale + slash commands
-│   ├── orchestrator/         🔜 Réception JSON, dispatch des actions
-│   ├── gm-dashboard/         🔜 Interface web MJ (React + Vite)
+│   ├── orchestrator/         ✅ API HTTP locale — validation + dispatch des AgentAction
+│   ├── gm-dashboard/         ✅ Interface web MJ minimale (React + Vite)
 │   └── session-summarizer/   🔜 Résumés post-session
 ├── packages/
 │   ├── shared-types/         ✅ Types partagés (AudioSegment, Session, AgentResponse…)
-│   ├── stt-client/           🔜 Abstraction STT (Voxtral API → Whisper local)
-│   ├── llm-agent/            🔜 Abstraction LLM (Mistral API → Ollama)
-│   ├── context-manager/      🔜 State machine de session
+│   ├── stt-client/           ✅ Abstraction STT (Voxtral API → Whisper local)
+│   ├── db/                   ✅ Persistance SQLite (sessions, transcript_lines)
+│   ├── context-manager/      ✅ State machine de session (scène, ambiance, historique, musique/image)
+│   ├── llm-agent/            ✅ Abstraction LLM (Mistral API → Ollama), prompt + validation Zod
 │   └── asset-library/        🔜 Musique/images + recherche sémantique
 ├── services/
 │   └── whisper-local/        🔜 Microservice Python faster-whisper (Phase 3)
@@ -262,9 +266,10 @@ AudioSegment.wavBuffer        ← prêt pour l'appel STT
 | Discord bot | discord.js v14 + @discordjs/voice | |
 | STT Phase 1 | Voxtral batch API (Mistral) | `POST /v1/audio/transcriptions`, fallback prévu : Whisper API OpenAI |
 | STT Phase 3 | faster-whisper (Python µservice) | REST interne |
-| LLM Phase 1-2 | Mistral API | mistral-large ou mistral-small |
+| LLM Phase 1-2 | Mistral API (`POST /v1/chat/completions`) | `packages/llm-agent`, mistral-small-latest par défaut |
 | LLM Phase 3 | Ollama (llama3, mistral local) | API REST nativement compatible |
 | Base de données | SQLite (better-sqlite3) | Sessions, logs |
+| Orchestrateur | Express (Node.js) | API locale (127.0.0.1 uniquement) |
 | Dashboard | React + Vite | Affiché sur le poste MJ |
 | OBS Integration | obs-websocket-js | Affichage scènes |
 | Tests | Vitest | |
@@ -448,12 +453,62 @@ Couverture actuelle :
 | `apps/discord-bot` | `session-manager.test.ts` | Transitions start/stop, reconnexion vocale (succès/échec), traitement d'erreur + compteur d'échecs du dispatch audio |
 | `packages/stt-client` | `client.test.ts` | Appel HTTP Voxtral, mapping de réponse, erreurs réseau/HTTP (429 + `Retry-After`), validation Zod de la réponse |
 | `packages/db` | `transcript-repository.test.ts` | Persistance des lignes de transcript, idempotence `(session_id, source_file)` |
+| `packages/context-manager` | `context-manager.test.ts` | Transitions d'état (IDLE/ACTIVE/PAUSED/ENDED), mutations de contexte, émission d'événements |
+| `packages/llm-agent` | `prompt.test.ts`, `client.test.ts` | Construction du prompt, appel Mistral, JSON invalide, échec de validation Zod, retry HTTP 5xx/429, pas de retry sur 401/timeout |
+| `apps/orchestrator` | `state.test.ts`, `server.test.ts` | Dispatch par type d'action, déduplication par fenêtre de temps, validation HTTP, rejet des types d'action inconnus, `/transcript/recent` |
 
 Les tests s'appuient sur les packages `dist/` déjà construits (imports `@rpg-assistant/*`) — exécutez `pnpm -r build` après avoir modifié un package partagé avant de relancer les tests d'un package consommateur.
 
 ---
 
-## Docker
+## Backend temps réel : context-manager, llm-agent, orchestrator, dashboard
+
+Ces quatre briques existent et sont testées **indépendamment**, mais ne sont **pas encore reliées automatiquement** : rien dans `discord-bot` n'appelle `context-manager`, `context-manager` n'est pas encore branché sur `llm-agent`, et rien n'appelle encore `POST /actions` sur l'orchestrateur en conditions réelles. C'est un choix délibéré (voir la discussion ci-dessous) — le câblage bout-en-bout reste à faire.
+
+### `packages/context-manager`
+
+Machine à états de session, utilisée en mémoire par le futur code qui orchestrera une session (aujourd'hui : uniquement testée en isolation).
+
+- États valides : `IDLE → ACTIVE → PAUSED → ACTIVE → ENDED` (`ENDED` est terminal — une nouvelle session utilise une nouvelle instance de `ContextManager`, à l'image de `session-manager.ts` qui crée un nouvel objet `Session` à chaque `/session start`).
+- Contenu suivi : scène/ambiance courantes, historique des N dernières lignes de transcript (`historyLimit`, défaut 20), musique et image actives.
+- Émet des événements typés (`stateChanged`, `sceneChanged`, `transcriptAppended`, `musicChanged`, `imageChanged`) via `onEvent()` — c'est ce flux d'événements qui devra être écouté par un futur pont HTTP vers l'orchestrateur (`apps/` ne peut pas importer un autre `apps/`, donc ce pont doit parler HTTP, pas appel de fonction direct).
+
+### `packages/llm-agent`
+
+Abstraction sur l'API de chat Mistral (`POST /v1/chat/completions`, pas l'endpoint Voxtral utilisé par `stt-client`).
+
+- `buildPrompt(context: AgentContext)` construit les messages système/utilisateur à partir de la scène, l'ambiance, les dernières répliques, la musique/image active, le système de jeu et un résumé de la bibliothèque d'assets.
+- `createLlmAgent({ apiKey, model?, temperature?, timeoutMs? }).decide(context)` appelle le modèle (`mistral-small-latest` par défaut) avec `response_format: json_object`, puis valide la réponse avec `AgentResponseSchema` (Zod, miroir du type `AgentResponse` de `shared-types`).
+- **Comportement explicite sur JSON invalide** : aucun fallback silencieux. Un JSON malformé ou qui ne respecte pas le schéma lève une `AgentError` — à l'appelant de décider (ignorer ce tick, alerter le MJ, etc.).
+- Timeout configurable (15s par défaut, `AbortController`) et retry avec backoff exponentiel sur erreurs réseau et HTTP 429/5xx — **pas** de retry sur 4xx (clé invalide) ni sur un timeout déjà écoulé (éviterait de multiplier la latence d'un agent censé réagir vite).
+
+### `apps/orchestrator`
+
+API HTTP locale (Express), liée à `127.0.0.1` uniquement — jamais exposée publiquement.
+
+| Endpoint | Description |
+|---|---|
+| `POST /actions` | Reçoit un `AgentResponse` (validé avec `AgentResponseSchema`, réutilisé depuis `packages/llm-agent` — un type d'action inconnu est rejeté en 400 par l'union discriminée Zod). Dispatch chaque action vers un handler dédié (`handlers.ts` : `handleMusic`, `handleImage`, `handleGmTip`, `handleRuleHelp`), qui la compare à l'état actuel du même type et ignore les doublons (même payload dans la fenêtre `DEDUP_WINDOW_MS`, 4s par défaut). |
+| `GET /state` | Snapshot de l'état courant (scène, ambiance, musique/image actives, dernier conseil MJ, dernière aide de règles) — c'est ce que le dashboard interroge. |
+| `GET /transcript/recent?sessionId=…&limit=20` | Lit les dernières lignes de transcript **directement dans le même fichier SQLite que discord-bot** (via `@rpg-assistant/db`, lecture seule depuis ce process). Nécessaire car `AgentResponse` ne transporte pas de transcript — étirer ce contrat aurait mélangé deux responsabilités. Retourne 503 si `DB_PATH` n'est pas configuré. |
+| `GET /health` | Vérification basique. |
+
+**Important** : pour Phase 1, le dispatch est *logique* (mise à jour d'un état en mémoire + logs structurés JSON), pas de lecture audio Discord ni d'appel OBS — ces intégrations réelles sont Phase 2/3.
+
+### `apps/gm-dashboard`
+
+Interface React + Vite minimale, interroge l'orchestrateur toutes les 3s (`GET /state`, `GET /transcript/recent`) et affiche : scène/ambiance, conseil MJ, image active, musique active, transcription récente, statut de connexion à l'orchestrateur. L'ID de session à afficher se saisit manuellement (aucun endpoint "session active" n'existe encore côté orchestrateur, faute de câblage bout-en-bout).
+
+Cette app a son **propre `tsconfig.json`** qui n'étend pas `tsconfig.base.json` (celui-ci cible CommonJS sans lib DOM, incompatible avec Vite/React) et n'est **pas couverte par `pnpm -r build`/`pnpm -r test` au même titre que les autres packages** — utilisez les commandes dédiées :
+
+```bash
+pnpm dev:orchestrator   # démarre l'API sur http://127.0.0.1:3001
+pnpm dev:dashboard      # démarre Vite sur http://localhost:5173
+```
+
+### Pourquoi le câblage bout-en-bout n'est pas fait
+
+Connecter `discord-bot` → `context-manager` → `llm-agent` → `apps/orchestrator` demande un client HTTP dans `discord-bot` (les règles de frontières de modules interdisent d'importer `apps/orchestrator` directement depuis `apps/discord-bot`), une boucle de déclenchement (polling 15s + mots-clés, ADR-004) pour décider quand appeler `llm-agent`, et la gestion des échecs de cette chaîne sans bloquer la capture audio. C'est un morceau de travail à part entière, volontairement laissé pour une prochaine itération plutôt que bâclé dans cette passe.
 
 Le projet est dockerisé via Docker Compose. Le build context est la racine du workspace (nécessaire pour le monorepo pnpm).
 

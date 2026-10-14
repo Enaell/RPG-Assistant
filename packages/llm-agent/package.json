@@ -1,0 +1,23 @@
+{
+  "name": "@rpg-assistant/llm-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LLM agent abstraction — builds prompts from session context, calls Mistral, validates AgentResponse",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rpg-assistant/shared-types": "workspace:*",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.2.0"
+  }
+}
